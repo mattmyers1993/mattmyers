@@ -1,0 +1,288 @@
+---
+title: "Swimming EDA"
+author: "Matt Myers"
+date: "2024-10-23"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# Introduction
+This exploratory data analysis is part of my capstone project for the Google Data Analytics Certificate. As part of the project I was given this prompt: 
+
+"You are a junior data analyst working for a business intelligence consultant. You have been at your job for six months, and   your boss feels you are ready for more responsibility. He has asked you to lead a project for a brand new client — this will involve everything from defining the business task all the way through presenting your data-driven recommendations. You will choose the topic, ask the right questions, identify a fresh dataset and ensure its integrity, conduct analysis, create compelling data visualizations, and prepare a presentation."
+
+In this scenario I'm imagining I am a sports analyst with a Masters swimming client who is looking to improve their freestyle stroke. I will utilize a years worth of data collected by their FORM smart goggles, that automatically logs 24 variables in each lap they swim. 
+
+# Main Question: What freestyle stroke rate is physiologically optimal for this swimmer?
+In recent years, a hot topic has been utilizing a high stroke rate in distance swimming events. Some are surprised to find that many Olympic distance swimmers are swimming with  high stroke rates in the range of 80-100 strokes/min. These include gold medalists Katie Ladecky(~90 SPM), Bobby Fink(~80 SPM), Gregorio Paltrinieri (~90 SPM), and Daniel Wiffen(~80 SPM), just to name a few. There are certainly counter examples of lower stroke rates having success such as 2012 gold medalist Sun Yang (~61 SPM) and Mykhailo Romanchuk (~66 SPM). The basic equation that determines swim speed is: Speed = Stroke Rate x Distance Per Stroke. So it would make sense that swimmers could improve there speed with either stroke rate or distance traveled with each stroke. 
+
+But is there one side that is optimal physiologically? In other words, what is the physiological cost in terms of heart rate for increasing stroke rate vs. increasing the distance traveled per stroke? Can we find a balance of stroke rate vs. distance per stroke that is optimal for our swimmers individual physiology?
+
+# Data Preperation
+To tackle this problem we will need to look at 3 main variables: 
+
+  * Lap splits 
+  * Average heart rate per lap
+  * Average Stroke Rate per lap
+  
+To make this easier, I will filter for lap splits of 16, 18, and 20 seconds that represent a range of continuous efforts. 16 seconds would be a hard continuous effort for our client. 20 seconds would be an extended aerobic pace. For each level of effort, we can look at the distribution of heart rates for stroke rate and see how much it cost internally to swim that split. This will help us answer the question: what did it cost the swimmer (in terms of heart beats) to swim a 14 second lap a stroke rate of 45-50 SPM, 50-55 SPM, 55-60 SPM, etc..    
+
+To set up our R libraries, we will be using 3 packages: 
+
+  * tidyverse
+  * lubridate
+  * fs 
+  
+```{r}
+library(fs)
+library(tidyverse)
+library(lubridate)
+```
+The data will come from our client's FORM swim goggles, which automatically collects 24 variables on each lap they swim. After each workout, our client is sent a CSV file with 24 columns and each row representing a lap completed. Our client has given us 206 of these CSV files representing 206 workouts done in the last year. To aggregate these we will use the dir_la() function from the fs package. 
+
+```{r}
+df <- dir_ls("~/Desktop/Form", recurse = TRUE) %>%
+  read_csv(col_names = FALSE, 
+           skip = 4, 
+           col_types = c(
+             "X1"="character",
+             "X2"="?",
+             "X3"="number",
+             "X4"="number",
+             "X5"="number",
+             "X6"="number",
+             "X7"="character",
+             "X8"="character",
+             "X9"="character",
+             "X10"="character",
+             "X11"="number",
+             "X12"="number",
+             "X13"="number",
+             "X14"="number",
+             "X15"="number",
+             "X16"="number",
+             "X17"="number",
+             "X18"="character",
+             "X19"="character",
+             "X20"="number",
+             "X21"="number",
+             "X22"="number",
+             "X23"="number",
+             "X24"="number"
+           ))
+```
+
+*Note: I put a "skip = 4 arguement" in because not all of the column headers are exactly the same. The majority of these workouts were done in a 25 yard setting where as some were done in a 50m setting hence some of the original column names reference "50m" instead of "25y". To start I will just chop off the headers in this step and then add back uniform headers in the next step.* 
+
+*Note: I'm defining each column type because some of the time formats were captured in the format mm:ss.00 but are being read as hh:mm:ss and losing the milliseconds in the process. To start, I will keep these variables as character strings.*
+
+To get these column names, I did a quick transpose and concat() in Excel to write the new column names:
+
+![using excel's transpose paste and the concat() function to write the new column names](~/Desktop/School/Google_Analytics_Cert/Class_8/swimming_case_study_files/col_names_concat.png)
+
+Next I can paste the concatenated names into a select function to rename the columns into a new data frame, df2.
+
+```{r}
+df2 <- select (df,
+  "date"="X1",
+"time"="X2",
+"set_num"="X3",
+"set"="X4",
+"interval"="X5",
+"length"="X6",
+"stroke"="X7",
+"move_time"="X8",
+"rest_time"="X9",
+"cumul_time"="X10",
+"len"="X11",
+"dist"="X12",
+"cumul_dist"="X13",
+"avg_dps"="X14",
+"avg_bpm"="X15",
+"max_bpm"="X16",
+"min_bpm"="X17",
+"pace_100"="X18",
+"pace_50"="X19",
+"swolf"="X20",
+"avg_sr"="X21",
+"stroke_count"="X22",
+"avg_sc_len"="X23",
+"calories"="X24"
+)
+```
+
+And now we have all of our data in one dataframe. We have 24 variables and 37,954 observations to work with. Now we can start cleaning this data. 
+
+```{r}
+df2
+```
+  
+# Data Cleaning
+
+First, I'll double check that the data types are correct for each column using the str() function. 
+```{r}
+str(df2)
+```
+There looks to be a couple of issues: 
+
+  * We now want to change the data type of move_time and rest_time to formal period using lubridate::ms()
+  * The distance column has 50m lengths which we will just filter out using length == 25
+  * We are only interested in freestyle laps in this analysis so stroke can be filtered to "FR"
+  * We want to see continuous swims as defined by an interval longer than 100 yards 
+  * If the heart rate monitor malfunctioned on a lap or was improperly placed, it returns a 0. We can filter for avg_bpm > 0.
+  * If any laps are swum completely underwater stroke count will read at 0. We can filter for stroke_count > 0. 
+
+```{r}
+df2$move_time <- lubridate::ms(df2$move_time)
+df2$rest_time <- lubridate::ms(df2$rest_time) 
+
+(df2 <- filter(df2, length == 25, 
+               stroke == 'FR',
+               interval > 100,
+               avg_bpm > 0,
+               stroke_count > 0))
+```
+Now we need to set up our subset data frames that include only 16s, 18s, and 20s laps respectively. I'll also pair down to the variables we'll be interested in looking at using select(): 
+
+  * move_time
+  * avg_bpm
+  * avg_sr
+  * stroke_count
+
+```{r}
+df_16 <- filter(df2, move_time > 16, 
+                  move_time < 17) %>% 
+  select(move_time, avg_bpm,  avg_sr, stroke_count)
+
+df_18 <- filter(df2, move_time > 18, 
+                  move_time < 19) %>% 
+  select(move_time, avg_bpm, avg_sr, stroke_count)
+
+df_20 <- filter(df2, move_time > 20, 
+                  move_time < 21) %>% 
+  select(move_time, avg_bpm, avg_sr, stroke_count,)
+```
+
+df_16 gives us a data frame of 4 variables and 440 observations. 
+
+```{r}
+df_16
+```
+df_18 gives us a data frame of 4 variables and 836 observations. 
+
+```{r}
+df_18
+```
+df_20 gives us a data frame of 4 variables and 4534 observations:
+
+```{r}
+df_20
+```
+
+Now that we've obtained, cleaned, filtered, and sorted our data we can move on to the analysis phase. 
+
+# Analysis
+First, we will start by making a grouped summary of the 16 second data frame. 
+
+```{r}
+(df_16_sc <- df_16 %>% group_by(avg_sr) %>% 
+  summarize(mean_heart_rate = mean(avg_bpm),
+            count = n()))
+```
+We might be able to see a pattern forming, but I think it will be easier to visual it using a boxplot. I'll group the stroke rates within 5 SPM, so we'll be able to see the distribution of heart rates in each 5 SPM bin. 
+```{r}
+ggplot(df_16, aes(x = avg_sr, y = avg_bpm))+
+  geom_boxplot(aes(group = cut_width(avg_sr, 5)))+
+   scale_x_continuous(limits = c(40, 80),
+                    breaks = seq(0, 100, 5),
+                    minor_breaks = seq(0, 100, 5)) +
+  scale_y_continuous(limits = c(0, 190))+
+  labs(title = "Stroke Rate vs. Heart Rate",
+      subtitle = "16 Second Laps",
+      x = "Average Stroke Rate",
+      y = "Average Heart Rate")
+```
+This boxplot helps start to see a pattern where heart rate increases with stroke rate, but is lowest around 50 strokes per minute. Let's try the same process for 18 sec laps, a moderate intensity for our swimmer. 
+```{r}
+(df_18_sc <- df_18 %>% group_by(avg_sr) %>% 
+  summarize(mean_heart_rate = mean(avg_bpm),
+            count = n()))
+```
+
+```{r}
+ggplot(df_18, aes(x = avg_sr, y = avg_bpm))+
+  geom_boxplot(aes(group = cut_width(avg_sr, 5)))+
+   scale_x_continuous(limits = c(40, 80),
+                    breaks = seq(0, 100, 5),
+                    minor_breaks = seq(0, 100, 5)) +
+  scale_y_continuous(limits = c(0, 190))+
+  labs(title = "Stroke Rate vs. Heart Rate",
+      subtitle = "18 Second Laps",
+      x = "Average Stroke Rate",
+      y = "Average Heart Rate")
+```
+In the 18 second laps, the pattern seems similar, but the optimal stroke rate seems to be even lower at 40-45 strokes per minute. 
+
+```{r}
+(df_20_sc <- df_20 %>% group_by(avg_sr) %>% 
+  summarize(mean_heart_rate = mean(avg_bpm),
+            count = n()))
+```
+
+```{r}
+ggplot(df_20, aes(x = avg_sr, y = avg_bpm))+
+  geom_boxplot(aes(group = cut_width(avg_sr, 5)))+
+   scale_x_continuous(limits = c(40, 80),
+                    breaks = seq(0, 100, 5),
+                    minor_breaks = seq(0, 100, 5)) +
+  scale_y_continuous(limits = c(0, 190))+
+  labs(title = "Stroke Rate vs. Heart Rate",
+      subtitle = "20 Second Laps",
+      x = "Average Stroke Rate",
+      y = "Average Heart Rate")
+```
+In the 20 second laps, the pattern is less severe, but similar. The lower stroke rates seem to cost less physiologically with the optimal point around 45-50 strokes per minute. 
+
+# Take Away & Further Questions
+
+## The Relationship Between Heart Rate and Stroke Rate
+There does seem to be some kind of relationship between heart rate and stroke rate. At the same given speed, using a higher stroke rate seems to yield a higher heart rate. The optimal point for this swimmer seems to land somewhere in the 40-50 strokes per minute range. 
+
+In future workouts, they can aim for this using their FORM goggles to monitor their stroke rate or they can use a tempo trainer. Another method would be to count their strokes, essentially focusing on utilizing a higher DPS. We can see the same pattern emerge when we analyze this swimmer's stroke count compared to their heart rate.  
+
+```{r}
+(df_20_sc <- df_20 %>% group_by(stroke_count) %>% 
+  summarize(mean_heart_rate = mean(avg_bpm),
+            count = n(),
+            mean_sr = mean(avg_sr)))
+```
+
+```{r}
+ggplot(df_20, aes(x = stroke_count, y = avg_bpm))+
+  geom_boxplot(aes(group = cut_width(stroke_count, 1)))+
+  scale_x_continuous(limits = c(0, 20),
+                    breaks = seq(0, 20, 1),
+                    minor_breaks = seq(0, 20, 1)) +
+  scale_y_continuous(limits = c(0, 190))+
+  labs(title = "Strokes vs. Heart Rate",
+      subtitle = "20 Second Laps",
+      x = "Stroke Count",
+      y = "Average Heart Rate")
+```
+With a given speed of swimming a lap in 20 seconds, we see that 10 strokes is the optimal stroke count for this swimmer physiologically. The grouped summary above shows the average stroke rate for 10 strokes is about 43 strokes/min.   
+
+## High Stroke Rate Requires High Aerobic Capacity
+
+At the end of the day swimming is about swimming the fastest time regardless of what your heart rate is. That involves maxing out distance per stroke and stroke rate. We've shown that high stroke rates require a higher degree of aerobic capacity. While it may be more optimal physiologically for this swimmer to swim at a certain stroke rate, it still may be fastest to swim at a stroke rate that is sub optimal for their physiology. 
+
+# Further Questions and Potential Further Analyses
+
+1. What is this swimmers optimal stroke rate for speed?
+
+2. Is there a formula that defines the relationship between heart rate and stroke rate? 
+
+3. If we got FORM goggle data from other swimmers, would other swimmers have a similar stroke rate that was optimal for their heart rate?
+  3A. Perhaps our swimmer has some mechanical inefficiencies in their stroke, such that focusing on DPS is more mechanically efficient and therefore more physiologically efficent as well. If we repeated this analysis with an elite level swimmer, would they have better mechanics and be less effected physiologically by swimming with a higher stroke rate?  
+
+4. Does training at a lower stroke rate for easy efforts effect one's ability to swim with a faster stroke rate on hard efforts?
