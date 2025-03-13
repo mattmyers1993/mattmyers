@@ -1,0 +1,2 @@
+This is my data analytics portfolio! As a data analyst with a recent Advanced Google Data Analytics certification, I bring a unique perspective shaped by my background as a production and script coordinator in the film industry. In these roles, I honed my analytical and project management skills. 
+I love thinking critically and have a strong work ethic—I’m all about getting the job done! The most fun part of any job is collaborating with interesting people. I believe no task is too small or too big. I’m excited to use data to uncover insights and help drive smart decisions.
